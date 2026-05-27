@@ -76,7 +76,8 @@ if [[ ! -f "${ABS_PROJECT_DIR}/rpms.in.yaml" ]]; then
     exit 1
 fi
 
-# Step 5: Detect OS for podman flags
+# Mask auto-mounted RHSM secrets (Podman Desktop, entitled hosts) so
+# subscription-manager can register inside the container when needed.
 PODMAN_FLAGS=""
 case "$(uname -s)" in
     Linux)
@@ -84,8 +85,8 @@ case "$(uname -s)" in
         PODMAN_FLAGS="--tmpfs /run/secrets"
         ;;
     Darwin)
-        echo "macOS detected. Using --platform=linux/amd64."
-        PODMAN_FLAGS="--platform=linux/amd64"
+        echo "macOS detected. Using --platform=linux/amd64 and --tmpfs /run/secrets."
+        PODMAN_FLAGS="--platform=linux/amd64 --tmpfs /run/secrets"
         ;;
     *)
         echo "Warning: Unsupported OS '$(uname -s)'. Proceeding without OS-specific flags."

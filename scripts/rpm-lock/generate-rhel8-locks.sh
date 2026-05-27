@@ -65,6 +65,23 @@ if ! command -v podman &> /dev/null; then
     exit 1
 fi
 
+# Mask auto-mounted RHSM secrets (Podman Desktop, entitled hosts) so
+# subscription-manager can register inside the container when needed.
+PODMAN_FLAGS=""
+case "$(uname -s)" in
+    Linux)
+        echo "Linux detected. Using --tmpfs /run/secrets."
+        PODMAN_FLAGS="--tmpfs /run/secrets"
+        ;;
+    Darwin)
+        echo "macOS detected. Using --platform=linux/amd64 and --tmpfs /run/secrets."
+        PODMAN_FLAGS="--platform=linux/amd64 --tmpfs /run/secrets"
+        ;;
+    *)
+        echo "Warning: Unsupported OS '$(uname -s)'. Proceeding without OS-specific flags."
+        ;;
+esac
+
 # --- Step 3: Generate RHEL 8 Repo File ---
 echo "--- Step 3: Generating RHEL 8 Repository File ---"
 
@@ -136,7 +153,7 @@ EOF
 
     echo "Running container to extract RHEL 8 repo file into '${ABS_PROJECT_DIR}'..."
     echo "Using execution image: ${RHEL8_EXECUTION_IMAGE}"
-    podman run --rm -it ${AUTH_MOUNT_FLAG} -v "${ABS_PROJECT_DIR}:/source:Z" --entrypoint sh "${RHEL8_EXECUTION_IMAGE}" -c "${RHEL8_COMMANDS}"
+    podman run --rm -it ${AUTH_MOUNT_FLAG} ${PODMAN_FLAGS} -v "${ABS_PROJECT_DIR}:/source:Z" --entrypoint sh "${RHEL8_EXECUTION_IMAGE}" -c "${RHEL8_COMMANDS}"
 
     if [ ! -f "${ABS_PROJECT_DIR}/${RHEL8_REPO_FILE}" ]; then
         echo "ERROR: Failed to generate RHEL 8 repo file." >&2
@@ -305,7 +322,7 @@ chmod +x "${SCRIPT_FILE_PATH}"
 
 echo "Running container to perform certificate swap and generate lock files..."
 echo "Using execution image: ${RHEL9_EXECUTION_IMAGE}"
-podman run --rm -it ${AUTH_MOUNT_FLAG} -v "${ABS_PROJECT_DIR}:/source:Z" --entrypoint /source/podman_script.sh "${RHEL9_EXECUTION_IMAGE}"
+podman run --rm -it ${AUTH_MOUNT_FLAG} ${PODMAN_FLAGS} -v "${ABS_PROJECT_DIR}:/source:Z" --entrypoint /source/podman_script.sh "${RHEL9_EXECUTION_IMAGE}"
 
 echo -e "\n--- Success! ---"
 echo "Generated files for RHEL 8 are located in '${ABS_PROJECT_DIR}'."
