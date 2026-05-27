@@ -33,15 +33,6 @@ RPM_LOCKFILE_PROTOTYPE_VERSION="${RPM_LOCKFILE_PROTOTYPE_VERSION:-main}"
 # This can be set from the command line if the default is not correct for your environment.
 REGISTRY_AUTH_FILE="${REGISTRY_AUTH_FILE:-${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/containers/auth.json}"
 
-# Mount the registry auth file into the container if it exists.
-AUTH_MOUNT_FLAG=""
-
-# If the registry auth file is not set, use the default path.
-if [ -f "${REGISTRY_AUTH_FILE}" ]; then
-    echo "Found Podman auth file at ${REGISTRY_AUTH_FILE}. Mounting into container."
-    AUTH_MOUNT_FLAG="-v ${REGISTRY_AUTH_FILE}:/root/.config/containers/auth.json:Z"
-fi
-
 # Use the first argument as the target directory.
 readonly LOCK_SCRIPT_TARGET_DIR="${1:-${SCRIPT_DIR}}"
 
@@ -76,17 +67,20 @@ if [[ ! -f "${ABS_PROJECT_DIR}/rpms.in.yaml" ]]; then
     exit 1
 fi
 
-# Mask auto-mounted RHSM secrets (Podman Desktop, entitled hosts) so
-# subscription-manager can register inside the container when needed.
-PODMAN_FLAGS=""
+# Extra podman run arguments: registry auth mount (if present) and OS-specific flags.
+PODMAN_RUN_ARGS=()
+if [ -f "${REGISTRY_AUTH_FILE}" ]; then
+    echo "Found Podman auth file at ${REGISTRY_AUTH_FILE}. Mounting into container."
+    PODMAN_RUN_ARGS+=(-v "${REGISTRY_AUTH_FILE}:/root/.config/containers/auth.json:Z")
+fi
 case "$(uname -s)" in
     Linux)
         echo "Linux detected. Using --tmpfs /run/secrets."
-        PODMAN_FLAGS="--tmpfs /run/secrets"
+        PODMAN_RUN_ARGS+=(--tmpfs /run/secrets)
         ;;
     Darwin)
         echo "macOS detected. Using --platform=linux/amd64 and --tmpfs /run/secrets."
-        PODMAN_FLAGS="--platform=linux/amd64 --tmpfs /run/secrets"
+        PODMAN_RUN_ARGS+=(--platform=linux/amd64 --tmpfs /run/secrets)
         ;;
     *)
         echo "Warning: Unsupported OS '$(uname -s)'. Proceeding without OS-specific flags."
@@ -231,7 +225,7 @@ echo "Using execution image: ${RHEL9_EXECUTION_IMAGE}"
 echo "PREREQUISITE: You must be logged into registry.redhat.io via 'podman login'."
 echo "----------------------------------------------"
 
-podman run --rm -it ${AUTH_MOUNT_FLAG} ${PODMAN_FLAGS} -v "${ABS_PROJECT_DIR}:/source:Z" --entrypoint /source/podman_script.sh "${RHEL9_EXECUTION_IMAGE}"
+podman run --rm -it "${PODMAN_RUN_ARGS[@]}" -v "${ABS_PROJECT_DIR}:/source:Z" --entrypoint /source/podman_script.sh "${RHEL9_EXECUTION_IMAGE}"
 
 echo -e "\n--- Success! ---"
 echo "Generated files are located in '${ABS_PROJECT_DIR}'."
