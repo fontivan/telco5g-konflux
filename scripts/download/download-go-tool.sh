@@ -70,14 +70,27 @@ extract_version_from_module() {
 
 # Function to get version from a Go tool binary
 # This is challenging because Go tools don't have a standard version format
-# We'll try common patterns: --version, version, -version
+# We'll try common patterns: go version -m, --version, version, -version
 get_tool_version() {
     local binary_path="$1"
     if [[ ! -x "$binary_path" ]]; then
         return 1
     fi
 
-    # Try different version commands and patterns
+    # Try go version -m first: reads the module version embedded in the binary's
+    # build metadata by the Go toolchain at install time. This is the most reliable
+    # method for Go binaries installed via 'go install pkg@version' because it
+    # bypasses the binary's own version command (which may print "(devel)" when
+    # built from source without a release tag).
+    local go_mod_version
+    if command -v go > /dev/null 2>&1; then
+        if go_mod_version=$(go version -m "$binary_path" 2>/dev/null | awk '$1 == "mod" {print $3; exit}') && [[ -n "$go_mod_version" ]] && [[ "$go_mod_version" != "(devel)" ]]; then
+            echo "$go_mod_version"
+            return 0
+        fi
+    fi
+
+    # Fall back to querying the binary directly using common version flag patterns
     local version_output=""
 
     # Try --version flag
