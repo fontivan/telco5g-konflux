@@ -271,9 +271,11 @@ main() {
             exit 1
         fi
 
-        # Install the tool with GOBIN pointing to our install directory
+        # Install the tool with GOBIN pointing to our install directory.
+        # Unset GOARCH/GOOS so go install doesn't treat this as a cross-compilation
+        # (go refuses to install cross-compiled binaries when GOBIN is set).
         echo "Downloading ${go_module}..."
-        if ! GOBIN="${install_dir}" go install "${go_module}"; then
+        if ! GOBIN="${install_dir}" GOARCH="" GOOS="" go install "${go_module}"; then
             echo "ERROR: Failed to install ${go_module}"
             echo "Please check that the module path and version are correct"
             exit 1
