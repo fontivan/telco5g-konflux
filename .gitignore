@@ -30,3 +30,8 @@ testbin/*
 *.swp
 *.swo
 *~
+
+# AI tool generated files
+.claude/
+.cursor/
+.kaiden/
