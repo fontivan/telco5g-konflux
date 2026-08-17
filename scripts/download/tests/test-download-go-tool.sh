@@ -114,6 +114,36 @@ EOF
     chmod +x "$install_path"
 }
 
+# Build a Go tool binary for a different GOOS/GOARCH than the host.
+# The result has embedded module metadata but cannot execute on this platform.
+build_cross_compiled_go_tool() {
+    local install_path="$1"
+    local go_module="$2"
+    local wrong_goos wrong_goarch
+
+    wrong_goos=linux
+    wrong_goarch=arm64
+    if [[ "$(go env GOOS)" == "linux" && "$(go env GOARCH)" == "arm64" ]]; then
+        wrong_goos=darwin
+        wrong_goarch=amd64
+    fi
+
+    local temp_dir package_path
+    temp_dir=$(mktemp -d)
+    package_path="${go_module%%@*}"
+
+    if ! (
+        cd "$temp_dir"
+        go mod init tmp > /dev/null 2>&1
+        GOOS="$wrong_goos" GOARCH="$wrong_goarch" go get "$go_module" > /dev/null 2>&1
+        GOOS="$wrong_goos" GOARCH="$wrong_goarch" go build -o "$install_path" "$package_path"
+    ); then
+        rm -rf "$temp_dir"
+        return 1
+    fi
+    rm -rf "$temp_dir"
+}
+
 test_download_valid_tool() {
     log_test_start "Download valid Go tool to empty directory"
 
@@ -143,11 +173,15 @@ test_download_versioned_tool() {
     if "$DOWNLOAD_SCRIPT" --install-dir "$test_dir" "$TEST_TOOL_VERSIONED" "$TEST_MODULE_VERSIONED" >> "$TEST_LOG_FILE" 2>&1; then
         # Check if binary was created
         if [[ -x "$test_dir/$TEST_TOOL_VERSIONED" ]]; then
+            local expected_version="${TEST_MODULE_VERSIONED##*@}"
             local version_output
-            if version_output=$(go version -m "$test_dir/$TEST_TOOL_VERSIONED" 2>/dev/null | awk '$1 == "mod" {print $3; exit}'); then
-                log_test_pass "Download Go tool with version support (version: $version_output)"
+            version_output=$(go version -m "$test_dir/$TEST_TOOL_VERSIONED" 2>/dev/null | awk '$1 == "mod" {print $3; exit}')
+            if [[ -z "$version_output" ]]; then
+                log_test_fail "Download Go tool with version support" "Missing embedded module version"
+            elif [[ "$version_output" != "$expected_version" ]]; then
+                log_test_fail "Download Go tool with version support" "Version mismatch: expected $expected_version, got $version_output"
             else
-                log_test_pass "Download Go tool with version support (version check unavailable)"
+                log_test_pass "Download Go tool with version support (version: $version_output)"
             fi
         else
             log_test_fail "Download Go tool with version support" "Binary not created"
@@ -357,25 +391,40 @@ test_version_match_but_not_runnable() {
         return
     fi
 
-    # Replace with a stub that exits 126, simulating exec format error.
-    # go version -m won't extract metadata from a shell script, so
-    # get_tool_version also fails and the script falls through to reinstall.
-    cat > "$test_dir/$TEST_TOOL_NAME" << 'STUB'
-#!/bin/sh
-exit 126
-STUB
-    chmod +x "$test_dir/$TEST_TOOL_NAME"
+    # Replace with a cross-compiled binary for another target. It retains
+    # embedded module metadata (so version matches) but cannot execute here.
+    if ! build_cross_compiled_go_tool "$test_dir/$TEST_TOOL_NAME" "$version_module"; then
+        log_test_fail "Reinstall when version matches but binary cannot run" "Failed to build cross-compiled binary"
+        return
+    fi
 
-    # Run download script — should detect non-runnable and reinstall
+    local expected_version="${version_module##*@}"
+    local embedded_version
+    embedded_version=$(go version -m "$test_dir/$TEST_TOOL_NAME" 2>/dev/null | awk '$1 == "mod" {print $3; exit}')
+    if [[ -z "$embedded_version" ]]; then
+        log_test_fail "Reinstall when version matches but binary cannot run" "Cross-compiled binary missing embedded module version"
+        return
+    elif [[ "$embedded_version" != "$expected_version" ]]; then
+        log_test_fail "Reinstall when version matches but binary cannot run" "Embedded version mismatch: expected $expected_version, got $embedded_version"
+        return
+    fi
+
+    # Run download script — version matches but binary is not runnable, so reinstall
     local output
     if output=$("$DOWNLOAD_SCRIPT" --install-dir "$test_dir" "$TEST_TOOL_NAME" "$version_module" 2>&1); then
-        # Verify reinstalled binary works (exit code != 126)
+        # Verify reinstalled binary is runnable and still has the expected version
         local rc=0
         "$test_dir/$TEST_TOOL_NAME" --help >/dev/null 2>&1 || rc=$?
-        if [[ $rc -ne 126 ]]; then
-            log_test_pass "Reinstall when version matches but binary cannot run"
-        else
+        local recovered_version
+        recovered_version=$(go version -m "$test_dir/$TEST_TOOL_NAME" 2>/dev/null | awk '$1 == "mod" {print $3; exit}')
+        if [[ $rc -eq 126 ]]; then
             log_test_fail "Reinstall when version matches but binary cannot run" "Binary not runnable after reinstall"
+        elif [[ -z "$recovered_version" ]]; then
+            log_test_fail "Reinstall when version matches but binary cannot run" "Reinstalled binary missing embedded module version"
+        elif [[ "$recovered_version" != "$expected_version" ]]; then
+            log_test_fail "Reinstall when version matches but binary cannot run" "Reinstalled version mismatch: expected $expected_version, got $recovered_version"
+        else
+            log_test_pass "Reinstall when version matches but binary cannot run"
         fi
     else
         log_test_fail "Reinstall when version matches but binary cannot run" "Script failed on reinstall"
