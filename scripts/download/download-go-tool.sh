@@ -122,6 +122,21 @@ get_tool_version() {
     return 1
 }
 
+# Returns 0 if the binary can be executed on this platform.
+# go version -m reads metadata without running the binary, so a wrong-arch
+# binary (e.g. macOS binary in a Linux container) can pass version checks alone.
+# Exit code 126 means the kernel could not load the binary (exec format error
+# or permission denied); any other exit code proves it actually ran.
+is_binary_runnable() {
+    local binary_path="$1"
+    local rc=0
+    "$binary_path" --help >/dev/null 2>&1 || rc=$?
+    if [[ $rc -ne 126 ]]; then
+        return 0
+    fi
+    return 1
+}
+
 check_go() {
     if ! command -v go > /dev/null 2>&1; then
         echo "ERROR: Go is required but not found in PATH"
@@ -243,8 +258,11 @@ main() {
                 echo "Local ${tool_name} version: $local_version"
 
                 if version_exact_match "$local_version" "$requested_version"; then
-                    echo "Local ${tool_name} version $local_version matches required version $requested_version"
-                    return 0
+                    if is_binary_runnable "$install_path"; then
+                        echo "Local ${tool_name} version $local_version matches required version $requested_version"
+                        return 0
+                    fi
+                    echo "Local ${tool_name} version $local_version matches but binary cannot run on this platform, will reinstall..."
                 else
                     echo "Local ${tool_name} version $local_version does not match required version $requested_version"
                 fi
@@ -263,6 +281,12 @@ main() {
 
     # Install the tool
     echo "Installing ${tool_name} from ${go_module}..."
+
+    # We have already determined we need to install here, but in some cases the file may already exist
+    if [[ -f "${install_path}" ]]; then
+        echo "Removing existing file: ${install_path}"
+        rm -f "${install_path}"
+    fi
 
     # Create install directory
     echo "Creating directory '${install_dir}'"
