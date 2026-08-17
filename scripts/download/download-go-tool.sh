@@ -125,16 +125,17 @@ get_tool_version() {
 # Returns 0 if the binary can be executed on this platform.
 # go version -m reads metadata without running the binary, so a wrong-arch
 # binary (e.g. macOS binary in a Linux container) can pass version checks alone.
-# Exit code 126 means the kernel could not load the binary (exec format error
-# or permission denied); any other exit code proves it actually ran.
+# Exit codes 126 and 127 mean the binary could not be executed (exec format
+# error, permission denied, or command not found); any other exit code proves
+# it actually ran.
 is_binary_runnable() {
     local binary_path="$1"
     local rc=0
     "$binary_path" --help >/dev/null 2>&1 || rc=$?
-    if [[ $rc -ne 126 ]]; then
-        return 0
+    if [[ $rc -eq 126 || $rc -eq 127 ]]; then
+        return 1
     fi
-    return 1
+    return 0
 }
 
 check_go() {
